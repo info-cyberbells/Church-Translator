@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fast Voice Stream</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        select, button {
+            padding: 12px 24px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        select {
+            background-color: #fff;
+            border: 1px solid #ddd;
+            min-width: 150px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            font-weight: 500;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #stopStream {
+            background-color: #f44336;
+        }
+        #status {
+            text-align: center;
+            margin: 10px 0;
+            color: #666;
+        }
+        .transcription-container {
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 20px;
+            height: 300px;
+            overflow-y: auto;
+            font-size: 18px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .voice-info {
+            text-align: center;
+            margin: 10px 0;
+            color: #666;
+            font-size: 14px;
+        }
+        .error-message {
+            color: #f44336;
+            text-align: center;
+            margin: 10px 0;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Fast Voice Stream</h1>
+        
+        <div class="controls">
+            <select id="languageSelect">
+                <option value="en">English</option>
+                <option value="es">Spanish</option>
+                <option value="pt">Portuguese</option>
+                <option value="yue">Chinese</option>
+                <option value="id">Indonesian</option>
+            </select>
+            <button id="startStream">Start Stream</button>
+            <button id="stopStream" disabled>Stop Stream</button>
+        </div>
+
+        <div id="status">Ready to start</div>
+        <div id="errorMessage" class="error-message"></div>
+        <div id="voiceInfo" class="voice-info"></div>
+        <div id="transcriptionContainer" class="transcription-container"></div>
+    </div>
+
+
+    <script>
+        const BASE_URL = window.location.origin;
+        const startButton = document.getElementById('startStream');
+        const stopButton = document.getElementById('stopStream');
+        const status = document.getElementById('status');
+        const errorMessage = document.getElementById('errorMessage');
+        const transcriptionContainer = document.getElementById('transcriptionContainer');
+        const voiceInfo = document.getElementById('voiceInfo');
+        const languageSelect = document.getElementById('languageSelect');
+        
+        let transcriptionEventSource = null;
+        let translationEventSource = null;
+        let synth = window.speechSynthesis;
+        let isSpeaking = false;
+        let currentAudio = null;
+        let lastSpokenText = '';
+        
+        // Generate a unique client ID
+        function generateUUID() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0,
+                    v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+        
+        const clientId = generateUUID();
+        
+        // Stop all current speech
+        async function stopAllSpeech() {
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio.currentTime = 0;
+                currentAudio = null;
+            }
+            synth.cancel();
+            isSpeaking = false;
+        }
+        
+        // Update voice information
+        function updateVoiceInfo() {
+            const selectedLanguage = languageSelect.value;
+            if (selectedLanguage === 'pt') {
+                voiceInfo.textContent = 'Using Microsoft Azure pt-BR-AntonioNeural voice';
+            } else if (selectedLanguage === 'es') {
+                voiceInfo.textContent = 'Using Microsoft Azure es-ES-AlvaroNeural voice';
+            } else if (selectedLanguage === 'yue') {
+                voiceInfo.textContent = 'Using Microsoft Azure yue-CN-YunSongNeural voice';
+            } else if (selectedLanguage === 'id') {
+                voiceInfo.textContent = 'Using Microsoft Azure id-ID-ArdiNeural voice';
+            } else {
+                voiceInfo.textContent = 'Using system default voice';
+            }
+        }
+        
+        // Speech synthesis function
+        async function speakText(text) {
+            if (!text.trim() || text === lastSpokenText || isSpeaking) return;
+            lastSpokenText = text;
+        
+            try {
+                await stopAllSpeech();
+                isSpeaking = true;
+        
+                const language = languageSelect.value;
+                
+                if (language === 'pt' || language === 'es' || language === 'yue' || language === 'id') {
+                    const response = await fetch('/synthesize_speech', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            text: text,
+                            language: language
+                        })
+                    });
+        
+                    if (!response.ok) {
+                        throw new Error('Speech synthesis failed');
+                    }
+        
+                    const audioBlob = await response.blob();
+                    const audioUrl = URL.createObjectURL(audioBlob);
+        
+                    return new Promise((resolve, reject) => {
+                        const audio = new Audio(audioUrl);
+                        currentAudio = audio;
+        
+                        const cleanupAudio = () => {
+                            URL.revokeObjectURL(audioUrl);
+                            currentAudio = null;
+                            isSpeaking = false;
+                        };
+        
+                        audio.onended = () => {
+                            cleanupAudio();
+                            resolve();
+                        };
+        
+                        audio.onerror = (error) => {
+                            cleanupAudio();
+                            reject(error);
+                        };
+        
+                        audio.play().catch(error => {
+                            cleanupAudio();
+                            reject(error);
+                        });
+                    });
+                } else {
+                    return new Promise((resolve, reject) => {
+                        const utterance = new SpeechSynthesisUtterance(text);
+                        utterance.lang = language;
+                        
+                        utterance.onend = () => {
+                            isSpeaking = false;
+                            resolve();
+                        };
+                        
+                        utterance.onerror = (event) => {
+                            isSpeaking = false;
+                            reject(event);
+                        };
+                        
+                        synth.speak(utterance);
+                    });
+                }
+            } catch (error) {
+                console.error('Speech error:', error);
+                isSpeaking = false;
+                errorMessage.textContent = `Error during speech synthesis: ${error.message}`;
+                setTimeout(() => {
+                    errorMessage.textContent = '';
+                }, 3000);
+            }
+        }
+        
+        // Connect to transcription stream
+        function connectEventSource() {
+            if (transcriptionEventSource) {
+                transcriptionEventSource.close();
+            }
+        
+            transcriptionEventSource = new EventSource(`${BASE_URL}/stream_transcription`);
+            let lastTranscription = '';
+        
+            transcriptionEventSource.onmessage = async (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (!data.keepalive && data.transcription) {
+                        const targetLanguage = languageSelect.value;
+                        const trimmedText = data.transcription.trim();
+                        const isFinal = data.is_final;
+        
+                        if (targetLanguage === 'en') {
+                            if (trimmedText !== lastTranscription) {
+                                transcriptionContainer.textContent = trimmedText;
+                                if (isFinal && trimmedText) {
+                                    lastTranscription = trimmedText;
+                                    await speakText(trimmedText);
+                                }
+                            }
+                        } else {
+                            try {
+                                const response = await fetch(`${BASE_URL}/translate_realtime`, {
+                                    method: 'POST',
+                                    headers: {
+                                        'Content-Type': 'application/json',
+                                    },
+                                    body: JSON.stringify({
+                                        text: trimmedText,
+                                        targetLanguage: targetLanguage,
+                                        clientId: clientId,
+                                        isFinal: isFinal
+                                    })
+                                });
+        
+                                if (!response.ok) {
+                                    throw new Error('Translation request failed');
+                                }
+                            } catch (error) {
+                                console.error('Translation error:', error);
+                                errorMessage.textContent = 'Error processing translation';
+                                setTimeout(() => {
+                                    errorMessage.textContent = '';
+                                }, 2000);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error('Transcription processing error:', error);
+                }
+            };
+        
+            transcriptionEventSource.onerror = () => {
+                status.textContent = 'Connection lost. Reconnecting...';
+                transcriptionEventSource.close();
+                setTimeout(connectEventSource, 2000);
+            };
+        }
+        
+        // Connect to translation stream
+        function connectTranslationStream(targetLanguage) {
+            if (translationEventSource) {
+                translationEventSource.close();
+            }
+        
+            translationEventSource = new EventSource(`${BASE_URL}/stream_translation/${targetLanguage}?client_id=${clientId}`);
+            let lastTranslation = '';
+        
+            translationEventSource.onmessage = async (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (!data.keepalive) {
+                        if (data.type === 'partial') {
+                            transcriptionContainer.textContent = data.translation;
+                        } else if (data.type === 'final' && data.translation) {
+                            if (data.translation !== lastTranslation) {
+                                transcriptionContainer.textContent = data.translation;
+                                lastTranslation = data.translation;
+                                await speakText(data.translation);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error('Translation processing error:', error);
+                }
+            };
+        
+            translationEventSource.onerror = () => {
+                errorMessage.textContent = 'Translation connection lost. Reconnecting...';
+                translationEventSource.close();
+                setTimeout(() => connectTranslationStream(targetLanguage), 2000);
+            };
+        }
+        
+        // Start streaming - Modified to prevent mic access
+        function startStreaming() {
+            errorMessage.textContent = '';
+            stopAllSpeech();
+            lastSpokenText = '';
+        
+            // Start stream without audio capture
+            startButton.disabled = true;
+            stopButton.disabled = false;
+            status.textContent = 'Streaming...';
+            transcriptionContainer.textContent = '';
+        
+            // Connect to event sources for receiving translations
+            connectEventSource();
+        
+            const targetLanguage = languageSelect.value;
+            if (targetLanguage !== 'en') {
+                connectTranslationStream(targetLanguage);
+            }
+        }
+        
+        // Stop streaming
+        function stopStreaming() {
+            fetch(`${BASE_URL}/stop_stream`, { method: 'POST' })
+                .then(() => {
+                    startButton.disabled = false;
+                    stopButton.disabled = true;
+                    if (transcriptionEventSource) {
+                        transcriptionEventSource.close();
+                        transcriptionEventSource = null;
+                    }
+                    if (translationEventSource) {
+                        translationEventSource.close();
+                        translationEventSource = null;
+                    }
+                    transcriptionContainer.textContent = '';
+                    status.textContent = 'Stopped';
+                    errorMessage.textContent = '';
+                    stopAllSpeech();
+                    lastSpokenText = '';
+                })
+                .catch(error => {
+                    status.textContent = 'Error stopping stream';
+                    errorMessage.textContent = error.message;
+                    console.error(error);
+                });
+        }
+        
+        // Event Listeners
+        startButton.addEventListener('click', startStreaming);
+        stopButton.addEventListener('click', stopStreaming);
+        
+        languageSelect.addEventListener('change', async () => {
+            const targetLanguage = languageSelect.value;
+            transcriptionContainer.textContent = '';
+            errorMessage.textContent = '';
+            await stopAllSpeech();
+            lastSpokenText = '';
+            updateVoiceInfo();
+        
+            if (translationEventSource) {
+                translationEventSource.close();
+                translationEventSource = null;
+            }
+        
+            if (startButton.disabled && targetLanguage !== 'en') {
+                setTimeout(() => connectTranslationStream(targetLanguage), 100);
+            }
+        });
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            updateVoiceInfo();
+        });
+        
+        // Cleanup on window unload
+        window.addEventListener('beforeunload', () => {
+            if (transcriptionEventSource) transcriptionEventSource.close();
+            if (translationEventSource) translationEventSource.close();
+            stopAllSpeech();
+        });
+        </script>
+    
+</body>
+</html>
+
+
+
+
+
+    <!-- <script>
+        const startButton = document.getElementById('startStream');
+const stopButton = document.getElementById('stopStream');
+const status = document.getElementById('status');
+const errorMessage = document.getElementById('errorMessage');
+const transcriptionContainer = document.getElementById('transcriptionContainer');
+const voiceInfo = document.getElementById('voiceInfo');
+const languageSelect = document.getElementById('languageSelect');
+
+let transcriptionEventSource = null;
+let translationEventSource = null;
+let synth = window.speechSynthesis;
+let isSpeaking = false;
+let currentAudio = null;
+let lastSpokenText = '';
+
+// Generate a unique client ID
+function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0,
+            v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+const clientId = generateUUID();
+
+// Stop all current speech
+async function stopAllSpeech() {
+    if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.currentTime = 0;
+        currentAudio = null;
+    }
+    synth.cancel();
+    isSpeaking = false;
+}
+
+// Update voice information
+function updateVoiceInfo() {
+    const selectedLanguage = languageSelect.value;
+    if (selectedLanguage === 'pt') {
+        voiceInfo.textContent = 'Using Microsoft Azure pt-BR-AntonioNeural voice';
+    } else if (selectedLanguage === 'es') {
+        voiceInfo.textContent = 'Using Microsoft Azure es-ES-AlvaroNeural voice';
+    } else {
+        voiceInfo.textContent = 'Using system default voice';
+    }
+}
+
+// Speech synthesis function
+async function speakText(text) {
+    if (!text.trim() || text === lastSpokenText || isSpeaking) return;
+    lastSpokenText = text;
+
+    try {
+        await stopAllSpeech();
+        isSpeaking = true;
+
+        const language = languageSelect.value;
+        
+        if (language === 'pt' || language === 'es') {
+            const response = await fetch('/synthesize_speech', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    text: text,
+                    language: language
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error('Speech synthesis failed');
+            }
+
+            const audioBlob = await response.blob();
+            const audioUrl = URL.createObjectURL(audioBlob);
+
+            return new Promise((resolve, reject) => {
+                const audio = new Audio(audioUrl);
+                currentAudio = audio;
+
+                const cleanupAudio = () => {
+                    URL.revokeObjectURL(audioUrl);
+                    currentAudio = null;
+                    isSpeaking = false;
+                };
+
+                audio.onended = () => {
+                    cleanupAudio();
+                    resolve();
+                };
+
+                audio.onerror = (error) => {
+                    cleanupAudio();
+                    reject(error);
+                };
+
+                audio.play().catch(error => {
+                    cleanupAudio();
+                    reject(error);
+                });
+            });
+        } else {
+            return new Promise((resolve, reject) => {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = language;
+                
+                utterance.onend = () => {
+                    isSpeaking = false;
+                    resolve();
+                };
+                
+                utterance.onerror = (event) => {
+                    isSpeaking = false;
+                    reject(event);
+                };
+                
+                synth.speak(utterance);
+            });
+        }
+    } catch (error) {
+        console.error('Speech error:', error);
+        isSpeaking = false;
+        errorMessage.textContent = `Error during speech synthesis: ${error.message}`;
+        setTimeout(() => {
+            errorMessage.textContent = '';
+        }, 3000);
+    }
+}
+
+// Connect to transcription stream
+function connectEventSource() {
+    if (transcriptionEventSource) {
+        transcriptionEventSource.close();
+    }
+
+    transcriptionEventSource = new EventSource('/stream_transcription');
+    let lastTranscription = '';
+
+    transcriptionEventSource.onmessage = async (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            if (!data.keepalive && data.transcription) {
+                const targetLanguage = languageSelect.value;
+                const trimmedText = data.transcription.trim();
+                const isFinal = data.is_final;
+
+                if (targetLanguage === 'en') {
+                    if (trimmedText !== lastTranscription) {
+                        transcriptionContainer.textContent = trimmedText;
+                        if (isFinal && trimmedText) {
+                            lastTranscription = trimmedText;
+                            await speakText(trimmedText);
+                        }
+                    }
+                } else {
+                    try {
+                        const response = await fetch('/translate_realtime', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                text: trimmedText,
+                                targetLanguage: targetLanguage,
+                                clientId: clientId,
+                                isFinal: isFinal
+                            })
+                        });
+
+                        if (!response.ok) {
+                            throw new Error('Translation request failed');
+                        }
+                    } catch (error) {
+                        console.error('Translation error:', error);
+                        errorMessage.textContent = 'Error processing translation';
+                        setTimeout(() => {
+                            errorMessage.textContent = '';
+                        }, 2000);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Transcription processing error:', error);
+        }
+    };
+
+    transcriptionEventSource.onerror = () => {
+        status.textContent = 'Connection lost. Reconnecting...';
+        transcriptionEventSource.close();
+        setTimeout(connectEventSource, 2000);
+    };
+}
+
+// Connect to translation stream
+function connectTranslationStream(targetLanguage) {
+    if (translationEventSource) {
+        translationEventSource.close();
+    }
+
+    translationEventSource = new EventSource(`/stream_translation/${targetLanguage}?client_id=${clientId}`);
+    let lastTranslation = '';
+
+    translationEventSource.onmessage = async (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            if (!data.keepalive) {
+                if (data.type === 'partial') {
+                    transcriptionContainer.textContent = data.translation;
+                } else if (data.type === 'final' && data.translation) {
+                    if (data.translation !== lastTranslation) {
+                        transcriptionContainer.textContent = data.translation;
+                        lastTranslation = data.translation;
+                        await speakText(data.translation);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Translation processing error:', error);
+        }
+    };
+
+    translationEventSource.onerror = () => {
+        errorMessage.textContent = 'Translation connection lost. Reconnecting...';
+        translationEventSource.close();
+        setTimeout(() => connectTranslationStream(targetLanguage), 2000);
+    };
+}
+
+// Start streaming
+function startStreaming() {
+    errorMessage.textContent = '';
+    stopAllSpeech();
+    lastSpokenText = '';
+
+    fetch('/start_stream', { method: 'POST' })
+        .then(response => {
+            if (!response.ok) throw new Error('Failed to start stream');
+            startButton.disabled = true;
+            stopButton.disabled = false;
+            status.textContent = 'Streaming...';
+            transcriptionContainer.textContent = '';
+
+            connectEventSource();
+
+            const targetLanguage = languageSelect.value;
+            if (targetLanguage !== 'en') {
+                connectTranslationStream(targetLanguage);
+            }
+        })
+        .catch(error => {
+            status.textContent = 'Error starting stream';
+            errorMessage.textContent = error.message;
+            console.error(error);
+        });
+}
+
+// Stop streaming
+function stopStreaming() {
+    fetch('/stop_stream', { method: 'POST' })
+        .then(() => {
+            startButton.disabled = false;
+            stopButton.disabled = true;
+            if (transcriptionEventSource) {
+                transcriptionEventSource.close();
+                transcriptionEventSource = null;
+            }
+            if (translationEventSource) {
+                translationEventSource.close();
+                translationEventSource = null;
+            }
+            transcriptionContainer.textContent = '';
+            status.textContent = 'Stopped';
+            errorMessage.textContent = '';
+            stopAllSpeech();
+            lastSpokenText = '';
+        })
+        .catch(error => {
+            status.textContent = 'Error stopping stream';
+            errorMessage.textContent = error.message;
+            console.error(error);
+        });
+}
+
+// Event Listeners
+startButton.addEventListener('click', startStreaming);
+stopButton.addEventListener('click', stopStreaming);
+
+languageSelect.addEventListener('change', async () => {
+    const targetLanguage = languageSelect.value;
+    transcriptionContainer.textContent = '';
+    errorMessage.textContent = '';
+    await stopAllSpeech();
+    lastSpokenText = '';
+    updateVoiceInfo();
+
+    if (translationEventSource) {
+        translationEventSource.close();
+        translationEventSource = null;
+    }
+
+    if (startButton.disabled && targetLanguage !== 'en') {
+        setTimeout(() => connectTranslationStream(targetLanguage), 100);
+    }
+});
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    updateVoiceInfo();
+});
+
+// Cleanup on window unload
+window.addEventListener('beforeunload', () => {
+    if (transcriptionEventSource) transcriptionEventSource.close();
+    if (translationEventSource) translationEventSource.close();
+    stopAllSpeech();
+});
+    </script> -->

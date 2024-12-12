@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Professional Speech Translation</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+            color: #333;
+        }
+        .container {
+            background-color: #ffffff;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            width: 80%;
+            max-width: 800px;
+        }
+        h1 {
+            color: #4a4a4a;
+            text-align: center;
+        }
+        .flex-container {
+            display: flex;
+            justify-content: space-between;
+            gap: 2rem;
+        }
+        .left-panel, .right-panel {
+            flex: 1;
+        }
+        .transcription-container {
+            background-color: #f9f9f9;
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+            padding: 1rem;
+            height: 300px;
+            overflow-y: auto;
+            font-size: 16px;
+            line-height: 1.5;
+        }
+        .controls {
+            margin-top: 1rem;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+        button, select {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+        }
+        button:hover, select:hover {
+            background-color: #45a049;
+        }
+        .status {
+            margin-top: 1rem;
+            text-align: center;
+            font-style: italic;
+            color: #666;
+        }
+        .error-message {
+            color: #ff0000;
+            text-align: center;
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Professional Speech Translation</h1>
+        <div class="flex-container">
+            <div class="left-panel">
+                <div class="controls">
+                    <select id="languageSelect">
+                        <option value="en">English</option>
+                    </select>
+                    <button id="startButton">Start Speaking</button>
+                    <button id="stopButton" style="display: none;">Stop</button>
+                </div>
+                <div id="status" class="status">Ready to start</div>
+                <div id="errorMessage" class="error-message"></div>
+            </div>
+        </div>
+        <div class="right-panel">
+            <div id="transcriptionContainer" class="transcription-container"></div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const startButton = document.getElementById('startButton');
+            const stopButton = document.getElementById('stopButton');
+            const status = document.getElementById('status');
+            const errorMessage = document.getElementById('errorMessage');
+            const transcriptionContainer = document.getElementById('transcriptionContainer');
+            const languageSelect = document.getElementById('languageSelect');
+            
+            let recognition;
+            let isRecording = false;
+            const sessionId = 'session-' + Math.random().toString(36).substring(2, 15);
+        
+            if ('webkitSpeechRecognition' in window) {
+                recognition = new webkitSpeechRecognition();
+                recognition.continuous = true;
+                recognition.interimResults = true;
+                recognition.maxAlternatives = 1;
+                recognition.lang = 'en-US';
+        
+                recognition.onstart = () => {
+                    isRecording = true;
+                    status.textContent = 'Listening...';
+                    errorMessage.textContent = '';
+                    startButton.style.display = 'none';
+                    stopButton.style.display = 'inline-block';
+                };
+        
+                recognition.onend = () => {
+                    if (isRecording) {
+                        recognition.start();
+                    }
+                };
+        
+                recognition.onerror = (event) => {
+                    console.error('Recognition error:', event.error);
+                    errorMessage.textContent = `Recognition error: ${event.error}`;
+                    if (event.error === 'no-speech' && isRecording) {
+                        recognition.stop();
+                        setTimeout(() => recognition.start(), 50);
+                    }
+                };
+        
+                recognition.onresult = (event) => {
+                    let finalTranscript = '';
+                    let interimTranscript = '';
+        
+                    for (let i = event.resultIndex; i < event.results.length; ++i) {
+                        const transcript = event.results[i][0].transcript;
+                        if (event.results[i].isFinal) {
+                            finalTranscript += transcript;
+                        } else {
+                            interimTranscript += transcript;
+                        }
+                    }
+        
+                    if (finalTranscript || interimTranscript) {
+                        displayText(finalTranscript || interimTranscript);
+                    }
+                };
+        
+                function displayText(text) {
+                    if (!text.trim()) return;
+                    const sanitizedText = text
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/\n/g, '<br>')
+                        .replace(/\s\s/g, '&nbsp;&nbsp;');
+                    transcriptionContainer.innerHTML = sanitizedText;
+                    transcriptionContainer.scrollTop = transcriptionContainer.scrollHeight;
+                }
+        
+                startButton.onclick = async () => {
+                    try {
+                        const response = await fetch(`/start_stream?session_id=${sessionId}&type=broadcaster`, {
+                            method: 'POST'
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error('Failed to start broadcast');
+                        }
+                        
+                        isRecording = true;
+                        errorMessage.textContent = '';
+                        transcriptionContainer.innerHTML = '';
+                        
+                        try {
+                            recognition.start();
+                        } catch (error) {
+                            recognition.stop();
+                            setTimeout(() => recognition.start(), 50);
+                        }
+                    } catch (error) {
+                        status.textContent = 'Error starting broadcast';
+                        errorMessage.textContent = error.message;
+                        console.error('Error:', error);
+                    }
+                };
+        
+                stopButton.onclick = async () => {
+                    try {
+                        const response = await fetch(`/stop_stream?session_id=${sessionId}`, {
+                            method: 'POST'
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error('Failed to stop broadcast');
+                        }
+                        
+                        isRecording = false;
+                        recognition.stop();
+                        status.textContent = 'Stopped';
+                        errorMessage.textContent = '';
+                        startButton.style.display = 'inline-block';
+                        stopButton.style.display = 'none';
+                        transcriptionContainer.innerHTML = '';
+                        
+                    } catch (error) {
+                        status.textContent = 'Error stopping broadcast';
+                        errorMessage.textContent = error.message;
+                        console.error('Error:', error);
+                    }
+                };
+        
+                window.onbeforeunload = () => {
+                    if (isRecording) {
+                        recognition.stop();
+                    }
+                };
+        
+            } else {
+                status.textContent = 'Speech recognition not supported in this browser.';
+                startButton.style.display = 'none';
+            }
+        });
+        </script>
+
+</body>
+</html>
+
+<!-- <script>
+    const startButton = document.getElementById('startButton');
+    const stopButton = document.getElementById('stopButton');
+    const status = document.getElementById('status');
+    const errorMessage = document.getElementById('errorMessage');
+    const transcriptionContainer = document.getElementById('transcriptionContainer');
+    const languageSelect = document.getElementById('languageSelect');
+    
+    let recognition;
+    let isRecording = false;
+    let translationBuffer = '';
+    let lastTranslationRequest = null;
+    let translationQueue = [];
+    let translationSource = null;
+    let silenceTimer = null;
+    let lastSpeechTime = Date.now();
+    
+    // Initialize speech recognition
+    if ('webkitSpeechRecognition' in window) {
+        recognition = new webkitSpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
+        recognition.lang = 'en-US';
+    
+        recognition.onstart = () => {
+            isRecording = true;
+            status.textContent = 'Listening...';
+            errorMessage.textContent = '';
+            startButton.style.display = 'none';
+            stopButton.style.display = 'inline-block';
+            translationBuffer = '';
+            translationQueue = [];
+            lastSpeechTime = Date.now();
+        };
+    
+        recognition.onend = () => {
+            if (isRecording) {
+                setTimeout(() => recognition.start(), 50);
+            }
+        };
+    
+        recognition.onerror = (event) => {
+            if (event.error === 'no-speech') {
+                if (isRecording) {
+                    recognition.stop();
+                    setTimeout(() => recognition.start(), 50);
+                }
+            }
+            errorMessage.textContent = `Recognition error: ${event.error}`;
+            console.error('Recognition error:', event.error);
+        };
+
+        // Function to check for silence and clear text
+        function checkSilence() {
+            const currentTime = Date.now();
+            const timeSinceLastSpeech = currentTime - lastSpeechTime;
+            
+            if (timeSinceLastSpeech > 2000) { // 2 seconds of silence
+                transcriptionContainer.innerHTML = '';
+            }
+        }
+
+        recognition.onresult = (event) => {
+            let interimTranscript = '';
+            let finalTranscript = '';
+            
+            // Reset the last speech time
+            lastSpeechTime = Date.now();
+            
+            // Clear any existing silence timer
+            if (silenceTimer) {
+                clearInterval(silenceTimer);
+            }
+            
+            // Set new silence timer
+            silenceTimer = setInterval(checkSilence, 500);
+    
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                const transcript = event.results[i][0].transcript;
+                if (event.results[i].isFinal) {
+                    finalTranscript += transcript;
+                } else {
+                    interimTranscript += transcript;
+                }
+            }
+    
+            if (languageSelect.value === 'en') {
+                displayText(finalTranscript || interimTranscript);
+            } else {
+                const textToTranslate = finalTranscript || interimTranscript;
+                if (textToTranslate.trim()) {
+                    translateWithDebounce(textToTranslate);
+                }
+            }
+        };
+    
+        function displayText(text) {
+            if (!text.trim()) return;
+            
+            const sanitizedText = text
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/\n/g, '<br>')
+                .replace(/\s\s/g, '&nbsp;&nbsp;');
+            
+            transcriptionContainer.innerHTML = sanitizedText;
+            
+            requestAnimationFrame(() => {
+                transcriptionContainer.scrollTop = transcriptionContainer.scrollHeight;
+            });
+        }
+    
+        startButton.onclick = async () => {
+            try {
+                const response = await fetch('/start_stream?type=broadcaster', {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to start broadcast');
+                }
+                
+                isRecording = true;
+                translationBuffer = '';
+                errorMessage.textContent = '';
+                transcriptionContainer.innerHTML = '';
+                lastSpeechTime = Date.now();
+                
+                // Start the silence checker
+                if (silenceTimer) {
+                    clearInterval(silenceTimer);
+                }
+                silenceTimer = setInterval(checkSilence, 500);
+                
+                try {
+                    recognition.start();
+                } catch (error) {
+                    console.error('Start error:', error);
+                    recognition.stop();
+                    setTimeout(() => recognition.start(), 50);
+                }
+            } catch (error) {
+                status.textContent = 'Error starting broadcast';
+                errorMessage.textContent = error.message;
+                console.error('Error:', error);
+            }
+        };
+    
+        stopButton.onclick = async () => {
+            try {
+                const response = await fetch('/stop_stream', { method: 'POST' });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to stop broadcast');
+                }
+                
+                isRecording = false;
+                recognition.stop();
+                status.textContent = 'Stopped';
+                errorMessage.textContent = '';
+                startButton.style.display = 'inline-block';
+                stopButton.style.display = 'none';
+                
+                // Clear the silence timer
+                if (silenceTimer) {
+                    clearInterval(silenceTimer);
+                    silenceTimer = null;
+                }
+                
+                // Clear the transcription
+                transcriptionContainer.innerHTML = '';
+                
+                if (translationSource) {
+                    translationSource.close();
+                    translationSource = null;
+                }
+            } catch (error) {
+                status.textContent = 'Error stopping broadcast';
+                errorMessage.textContent = error.message;
+                console.error('Error:', error);
+            }
+        };
+    
+        // Cleanup on page unload
+        window.onbeforeunload = () => {
+            if (silenceTimer) {
+                clearInterval(silenceTimer);
+            }
+            if (translationSource) {
+                translationSource.close();
+            }
+            if (isRecording) {
+                recognition.stop();
+            }
+        };
+    
+    } else {
+        status.textContent = 'Speech recognition is not supported in this browser.';
+        startButton.style.display = 'none';
+    }
+</script> -->
